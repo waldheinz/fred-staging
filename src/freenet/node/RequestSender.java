@@ -3,12 +3,8 @@
  * http://www.gnu.org/ for further details of the GPL. */
 package freenet.node;
 
-import static java.util.concurrent.TimeUnit.MINUTES;
-import static java.util.concurrent.TimeUnit.SECONDS;
-
-import java.util.ArrayList;
-
 import freenet.crypt.CryptFormatException;
+import freenet.crypt.DSAGroup;
 import freenet.crypt.DSAPublicKey;
 import freenet.io.comm.AsyncMessageCallback;
 import freenet.io.comm.DMT;
@@ -37,6 +33,8 @@ import freenet.node.FailureTable.OfferList;
 import freenet.node.OpennetManager.ConnectionType;
 import freenet.node.OpennetManager.WaitedTooLongForOpennetNoderefException;
 import freenet.store.KeyCollisionException;
+import freenet.support.Base64;
+import freenet.support.IllegalBase64Exception;
 import freenet.support.LogThresholdCallback;
 import freenet.support.Logger;
 import freenet.support.Logger.LogLevel;
@@ -45,6 +43,21 @@ import freenet.support.SimpleFieldSet;
 import freenet.support.TimeUtil;
 import freenet.support.io.NativeThread;
 import freenet.support.math.MedianMeanRunningAverage;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.ProtocolException;
+import java.net.URL;
+import java.net.URLConnection;
+import java.util.ArrayList;
+import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import java.util.logging.Level;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * @author amphibian
@@ -184,6 +197,98 @@ public final class RequestSender extends BaseSender implements PrioRunnable {
     
     @Override
     public void run() {
+        try {
+            this.unsafeRun();
+        } catch (Exception ex) {
+            System.out.println("rs ex: " + ex);
+            finish(DATA_NOT_FOUND, null, false);
+        }
+    }
+    
+    private void unsafeRun() throws MalformedURLException, IOException, IllegalBase64Exception, SSKVerifyException {
+    
+        System.out.println("key = " + this.key);
+        
+        if (this.key instanceof NodeCHK) {
+            fetchChk();
+        } else if (this.key instanceof NodeSSK) {
+            fetchSsk();
+        }
+    }
+
+    private void fetchSsk() throws IOException, IllegalBase64Exception, SSKVerifyException {
+        final NodeSSK ssk = (NodeSSK) this.key;
+        
+        final JSONObject reqObj = new JSONObject();
+        reqObj.put("pubKeyHash", Base64.encode(ssk.getPubKeyHash()));
+        reqObj.put("ehDocName", Base64.encode(ssk.getKeyBytes()));
+        reqObj.put("algorithm", ssk.getType() & 0xff);
+        
+        final JSONObject resp = adsRequest(reqObj, "ssk");
+        
+        if (pubKey == null) {
+            final JSONObject pkObj = resp.getJSONObject("pubKey");
+            final BigInteger p = new BigInteger(1, Base64.decode(pkObj.getString("p")));
+            final BigInteger g = new BigInteger(1, Base64.decode(pkObj.getString("g")));
+            final BigInteger q = new BigInteger(1, Base64.decode(pkObj.getString("q")));
+            final BigInteger y = new BigInteger(1, Base64.decode(pkObj.getString("y")));
+            
+            pubKey = new DSAPublicKey(new DSAGroup(p, q, g), y);
+            ssk.setPubKey(pubKey);
+        }
+        final String dataBase64 = resp.getString("data");
+        final String headersBase64 = resp.getString("header");
+        
+        
+        
+        finishSSK(null, false,
+                Base64.decode(headersBase64),
+                Base64.decode(dataBase64));
+    }
+    
+    private void fetchChk() throws IllegalBase64Exception, MalformedURLException, JSONException, IOException, ProtocolException {
+        final NodeCHK chk = (NodeCHK) this.key;
+        
+        final JSONObject reqObj = new JSONObject();
+        reqObj.put("location", Base64.encode(chk.getRoutingKey()));
+        reqObj.put("algorithm", chk.getType() & 0xff);
+        
+        final JSONObject respObj = adsRequest(reqObj, "chk");
+        
+        final String dataBase64 = respObj.getString("data");
+        final String headersBase64 = respObj.getString("header");
+        
+        try {
+            this.verifyAndCommit(
+                    Base64.decode(headersBase64),
+                    Base64.decode(dataBase64));
+            
+            finish(SUCCESS, null, true);
+        } catch (KeyVerifyException ex) {
+            System.out.println("ads : verify error: " + ex);
+            finish(GET_OFFER_VERIFY_FAILURE, null, true);
+        }
+    }
+
+    private JSONObject adsRequest(final JSONObject reqObj, String tp) throws MalformedURLException, IOException, JSONException, ProtocolException {
+        final URL url = new URL("http://localhost:8082/api/fetch/" + tp);
+        final HttpURLConnection conn =
+                (HttpURLConnection) url.openConnection();
+        conn.setDoInput(true);
+        conn.setDoOutput(true);
+        conn.setRequestMethod("POST");
+        conn.setUseCaches(false);
+        final DataOutputStream dos = new DataOutputStream(conn.getOutputStream());
+        dos.writeBytes(reqObj.toString());
+        dos.close();
+        final DataInputStream dis = new DataInputStream(conn.getInputStream());
+        final JSONObject respObj = new JSONObject(dis.readLine());
+        dis.close();
+        
+        return respObj;
+    }
+    
+    public void runOld() {
     	node.getTicker().queueTimedJob(new Runnable() {
     		
     		@Override
@@ -1357,7 +1462,7 @@ public final class RequestSender extends BaseSender implements PrioRunnable {
 		next.noLongerRoutingTo(origTag, false);
 	}
 
-	/**
+    /**
      * Finish fetching an SSK. We must have received the data, the headers and the pubkey by this point.
      * @param next The node we received the data from.
 	 * @param wasFork 

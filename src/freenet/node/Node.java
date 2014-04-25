@@ -790,7 +790,7 @@ public class Node implements TimeSkewDetectorCallback {
 	 */
 	static final int MIN_UPTIME_STORE_KEY = 40;
 
-	private volatile boolean isPRNGReady = false;
+	private volatile boolean isPRNGReady = true;
 
 	private boolean storePreallocate;
 	
