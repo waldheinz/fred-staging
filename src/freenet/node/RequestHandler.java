@@ -511,15 +511,16 @@ public class RequestHandler implements PrioRunnable, ByteCounter, RequestSenderL
 		synchronized(this) {
 			if(disconnected)
 				disconn = true;
-			else if(bt == null) {
+                        
+//			else if(bt == null) {
 				// Bug! This is impossible!
-				Logger.error(this, "Status is "+status+" but we never started a transfer on " + uid);
+//				Logger.error(this, "Status is "+status+" but we never started a transfer on " + uid);
 				// Obviously this node is confused, send a terminal reject to make sure the requestor is not waiting forever.
-				reject = DMT.createFNPRejectedOverload(uid, true, false, false);
-			} else {
-				xferFinished = readyToFinishTransfer();
-				xferSuccess = transferSuccess;
-			}
+//				reject = DMT.createFNPRejectedOverload(uid, true, false, false);
+//			} else {
+                    xferFinished = readyToFinishTransfer();
+                    xferSuccess = transferSuccess;
+//			}
 		}
 		if(disconn)
 			unregisterRequestHandlerWithNode();
